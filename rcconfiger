@@ -1,0 +1,224 @@
+#!/usr/bin/python
+
+import sys, os.path, re
+
+class Configfile:
+	def __init__( self, filename, create=False ):
+		self.filename = filename
+		self.create = create
+		if not os.path.isfile( filename ):
+			if not self.create:
+				raise("file %s not found" % self.filename)
+				return
+			open( filename, 'a' ).close()
+		self.changed = False
+		self.lines = []
+		with open( filename ) as f:
+			for line in f:
+				self.lines.append( line.rstrip() )
+	
+	def listall(self):
+		commented = re.compile('^#[^ \t=]+[ \t]*=.*$')
+		uncommented = re.compile('^[^ \t=]+[ \t]*=.*$')
+		for line in self.lines:
+			if commented.match( line ):
+				print(line)
+			elif uncommented.match( line ):
+				print(line)
+			else:
+				pass	
+	
+	def listall_machine_readable(self):
+		commented = re.compile('^#(?P<key>[^ \t=]+)[ \t]*=[ \t]*(?P<value>.*)$')
+		uncommented = re.compile('^(?P<key>[^ \t=]+)[ \t]*=[ \t]*(?P<value>.*)$')
+		for line in self.lines:
+			if commented.match( line ):
+				m = commented.search( line )
+				yield('#', m.group('key'), m.group('value'))
+			elif uncommented.match( line ):
+				m = uncommented.search( line )
+				yield('', m.group('key'), m.group('value'))
+			else:
+				pass	
+	
+	def get(self, key):
+		regex = re.compile('^(?P<key>[^ \t=#]+)[ \t]*=[ \t]*(?P<value>.*)$')
+		for line in self.lines:
+			m = regex.search(line)
+			if m is not None:
+				if m.group('key') == key:
+					print(m.group('value'))
+	
+	def set(self, key, value):
+		found = False
+		regex = re.compile('^#?(?P<key>[^ \t=#]+)')
+		for i, line in enumerate(self.lines):
+			m = regex.search(line)
+			if m is not None and m.group('key') == key:
+				self.lines[i] = "%s = %s" % (key, value)
+				self.changed = True
+				found = True
+		if not found:
+			#print("key %s was not found and thus not changed" % key)
+			pass
+	
+	def comment(self, key):
+		found = False
+		regex = re.compile('^(?P<key>[^ \t=#]+)')
+		for i, line in enumerate(self.lines):
+			m = regex.search(line)
+			if m is not None and m.group('key') == key:
+				self.lines[i] = "#%s" % line
+				self.changed = True
+				found = True
+		if not found:
+			#print("uncommented key %s was not found and thus not commented" % key)
+			pass
+	
+	def uncomment(self, key):
+		found = False
+		regex = re.compile('^#(?P<key>[^ \t=#]+)')
+		for i, line in enumerate(self.lines):
+			m = regex.search(line)
+			if m is not None and m.group('key') == key:
+				self.lines[i] = "%s" % line
+				self.changed = True
+				found = True
+		if not found:
+			#print("comment for key %s was not found and thus not uncommented" % key)
+			pass
+	
+	def save(self):
+		if self.changed:
+			with open(self.filename, "wt") as f:
+				for line in self.lines:
+					f.write("%s\n" % line)
+	
+	def apply_patch(self, patch):
+		keyvalue = re.compile('^(?P<key>[^ \t=#]+)[ \t]*=[ \t]*(?P<value>.*)$')
+		uncommented = re.compile('^(?P<key>[^ \t=#]+)')
+		commented = re.compile('^#(?P<key>[^ \t=#]+)')
+		for (comment, key, value) in patch.listall_machine_readable():
+			print(comment, key, value)
+			if comment == '#':
+				self.set(key, value)
+				self.comment(key)
+			else:
+				self.set(key, value)
+				self.uncomment(key)
+
+
+def help():
+	print('''
+rcconfiger [-h|--help]
+ -h|--help    ... print this help and exit
+
+rcconfiger [[-n] -f file] [-g key] [-s key value] [-c key] [-u key] [-l]
+ -f file      ... work on file
+ -n           ... create file if nessesary
+ -g key       ... get value of key
+ -s key value ... set key = value
+ -c key       ... comment key
+ -u key       ... uncomment key
+ -l           ... list all options
+
+rcconfiger [[-n] -f file] [-p patch]
+ -p patch     ... apply config lines from patch to file
+                  lines must be (optionally commented) key=value pairs, empty
+                  or comments (#[ ]...)
+''')
+
+def main(args):
+	if '-h' in args or '--help' in args:
+		help()
+		return
+	
+	create = False
+	filename = None
+	patchname = None
+	operation = None
+	key = None
+	value = ''
+	
+	while len(args):
+		arg0 = args.pop(0)
+		
+		if arg0 == '-f':
+			filename = args.pop(0)
+			continue
+		
+		if arg0 == '-g':
+			if operation is not None:
+				raise("can't combine -g, -s, -c, -u and -l")
+			operation = arg0
+			key = args.pop(0)
+			continue
+		
+		if arg0 == '-s':
+			if operation is not None:
+				raise("can't combine -g, -s, -c, -u and -l")
+			operation = arg0
+			key = args.pop(0)
+			value = args.pop(0)
+			continue
+		
+		if arg0 == '-c':
+			if operation is not None:
+				raise("can't combine -g, -s, -c, -u and -l")
+			operation = arg0
+			key = args.pop(0)
+			continue
+		
+		if arg0 == '-u':
+			if operation is not None:
+				raise("can't combine -g, -s, -c, -u and -l")
+			operation = arg0
+			key = args.pop(0)
+			continue
+		
+		if arg0 == '-n':
+			create = True
+			continue
+		
+		if arg0 == '-l':
+			operation = arg0
+			continue
+		
+		if arg0 == '-p':
+			operation = arg0
+			patchname = args.pop(0)
+			continue
+	
+	if filename is None:
+		raise("file is missing")
+	
+	configfile = Configfile(filename, create)
+	
+	if operation == '-g':
+		configfile.get( key )
+	
+	elif operation == '-s':
+		configfile.set( key, value )
+	
+	elif operation == '-c':
+		configfile.comment( key )
+	
+	elif operation == '-u':
+		configfile.uncomment( key )
+	
+	elif operation == '-l':
+		configfile.listall()
+	
+	elif operation == '-p':
+		patchfile = Configfile(patchname, False)
+		configfile.apply_patch(patchfile)
+	
+	else:
+		raise('no operation given, see help')
+	
+	configfile.save()
+	
+	#/ main(args)
+
+if __name__ == '__main__':
+	main(sys.argv[1:])
